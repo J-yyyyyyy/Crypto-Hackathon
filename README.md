@@ -129,16 +129,21 @@ to reduce noise.
 
 ## Features
 
-FEATURE_COLUMNS now focuses on **24 stationary, ratio/return-based indicators**:
+FEATURE_COLUMNS now cover **seasonality, cross-asset context, lagged momentum and
+volatility-adjusted signals** alongside the stationary ratios:
 
-- **EMA cross ratios**: ema_7 / ema_21 - 1, ema_21 / ema_50 - 1
-- **Momentum**: RSI(14) + slope(3), MACD histogram + slope(3), ROC(6, 24)
-- **Volatility**: ATR% of price, Bollinger %B and width, realized vol (24)
-- **Volume**: relative volume (vs. 14), volume z-score (24), taker-buy ratio,
-  OBV rate-of-change (6)
+- **EMA cross ratios**: ema_7 / ema_21 - 1, ema_21 / ema_50 - 1, price / ema_200
+- **Momentum**: RSI(14)+slope(3), MACD histogram+slope(3), ROC(6, 24),
+  lagged returns (1–12), daily change/RSI
+- **Volatility**: ATR% of price, Bollinger %B/width, realized vol (24),
+  24h return volatility, returns / ATR
+- **Volume**: relative volume (vs. 14), volume z-score (24), taker-buy ratio
+  (smoothed), OBV ROC(6), volume breakout flag, BTC volume ratio
 - **Price action**: 1h/24h returns, candle body ratio, high-low spread,
   return z-score (24), close percentile rank (24)
-- **Trend strength**: ADX(14), +DI / -DI difference
+- **Trend strength / regimes**: ADX(14), +DI / -DI difference, price over ema_200
+- **Cross-asset & cycles**: BTC dominance and rolling correlation (24/48),
+  hour/day-of-week plus Fourier (24h/168h)
 
 ---
 
