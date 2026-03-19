@@ -41,6 +41,7 @@ XGBOOST_PARAMS: dict = {
 MIN_VAL_SAMPLES = 10
 MIN_VAL_RATIO = 0.1
 MAX_VAL_RATIO = 0.2
+IMPORTANCE_ESTIMATORS_CAP = 300
 
 _FIT_PARAMS = signature(XGBClassifier.fit).parameters
 SUPPORTS_CALLBACKS = "callbacks" in _FIT_PARAMS
@@ -118,7 +119,9 @@ class CryptoTrendModel:
     ) -> tuple[list[str], list[tuple[str, float]]]:
         """Use XGBoost feature importances to drop uninformative predictors."""
         quick_params = params.copy()
-        quick_params["n_estimators"] = min(quick_params.get("n_estimators", 200), 300)
+        quick_params["n_estimators"] = min(
+            quick_params.get("n_estimators", 200), IMPORTANCE_ESTIMATORS_CAP
+        )
         model = XGBClassifier(**quick_params)
         model.fit(
             df[feature_columns].values,

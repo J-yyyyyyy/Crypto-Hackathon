@@ -64,6 +64,15 @@ def _safe_auc(y_true, y_prob):
 def evaluate_baselines(df_feat, target_col: str) -> dict:
     """Compare simple baselines (persistence, momentum, crossover)."""
     y_true = df_feat[target_col].values
+    required_cols = {"return_4h", "roc_6", "ema_7", "ema_21"}
+    if missing := required_cols - set(df_feat.columns):
+        return {
+            "missing_features": {
+                "columns": sorted(missing),
+                "accuracy": None,
+                "auc": None,
+            }
+        }
     baselines = {
         "positive_return_4h": (df_feat["return_4h"] > 0).astype(int).values,
         "momentum_roc6": (df_feat["roc_6"] > 0).astype(int).values,
@@ -230,8 +239,15 @@ def main() -> None:
             for name, stats in r["baselines"].items():
                 auc_val = stats.get("auc")
                 auc_fmt = f"{auc_val:.4f}" if auc_val is not None else "N/A"
+                acc_val = stats.get("accuracy")
+                acc_fmt = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                extra = ""
+                if name == "missing_features":
+                    cols = ",".join(stats.get("columns", []))
+                    if cols:
+                        extra = f" (missing: {cols})"
                 print(
-                    f"      baseline {name:<12} acc={stats['accuracy']:.4f} auc={auc_fmt}"
+                    f"      baseline {name:<16} acc={acc_fmt} auc={auc_fmt}{extra}"
                 )
 
 
