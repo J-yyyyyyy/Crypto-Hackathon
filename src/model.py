@@ -89,13 +89,13 @@ class CryptoTrendModel:
         self._feature_columns: list[str] | None = None
 
     def _select_top_features(
-        self, df: pd.DataFrame, candidate_columns: list[str], target_column: str
+        self, df: pd.DataFrame, candidate_columns: list[str]
     ) -> list[str]:
         """Select most stable predictors via correlation with the target."""
         corr = (
-            df[candidate_columns + [target_column]]
-            .corr()[target_column]
-            .drop(target_column)
+            df[candidate_columns + [self.target_column]]
+            .corr()[self.target_column]
+            .drop(self.target_column)
             .abs()
             .dropna()
         )
@@ -234,9 +234,7 @@ class CryptoTrendModel:
         )
 
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
-        selected = self._select_top_features(
-            df, available, target_column=self.target_column
-        )
+        selected = self._select_top_features(df, available)
         X = df[selected].values
         y = df[self.target_column].values
 

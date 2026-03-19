@@ -65,7 +65,7 @@ def evaluate_baselines(df_feat, target_col: str) -> dict:
     """Compare simple baselines (persistence, momentum, crossover)."""
     y_true = df_feat[target_col].values
     baselines = {
-        "persistence": (df_feat["return_4h"] > 0).astype(int).values,
+        "lagged_return_4h": (df_feat["return_4h"] > 0).astype(int).values,
         "momentum_roc6": (df_feat["roc_6"] > 0).astype(int).values,
         "ema7_gt_ema21": (df_feat["ema_7"] > df_feat["ema_21"]).astype(int).values,
     }

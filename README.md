@@ -161,7 +161,7 @@ data before any feature selection:
   early stopping, feature-importance pruning after correlation pre-filtering
 - **Validation**: Time-series cross-validation (`TimeSeriesSplit`, 5 folds) +
   early stopping on a chronological hold-out slice using AUC
-- **Baselines**: persistence (last 4h trend), ROC(6) momentum, EMA(7/21) crossover
+- **Baselines**: lagged 4h return, ROC(6) momentum, EMA(7/21) crossover
 - **Output**: Probability in **[0, 1]** — higher values indicate a stronger
   uptrend signal for the next 4 hours
 
