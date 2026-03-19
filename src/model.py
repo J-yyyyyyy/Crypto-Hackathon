@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import os
 import warnings
+from inspect import signature
 import joblib
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+from xgboost.callback import EarlyStopping
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 
 from .feature_engineering import FEATURE_COLUMNS
 
@@ -39,6 +41,10 @@ XGBOOST_PARAMS: dict = {
 MIN_VAL_SAMPLES = 10
 MIN_VAL_RATIO = 0.1
 MAX_VAL_RATIO = 0.2
+
+_FIT_PARAMS = signature(XGBClassifier.fit).parameters
+SUPPORTS_CALLBACKS = "callbacks" in _FIT_PARAMS
+SUPPORTS_EARLY_STOPPING = "early_stopping_rounds" in _FIT_PARAMS
 
 
 class CryptoTrendModel:
@@ -121,7 +127,7 @@ class CryptoTrendModel:
         Returns
         -------
         dict
-            ``{"oof_auc": float}`` — average out-of-fold ROC-AUC score.
+            Metrics including mean out-of-fold ROC-AUC and train/test accuracy.
         """
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
         selected = self._select_top_features(df, available)
@@ -136,12 +142,25 @@ class CryptoTrendModel:
             y_tr, y_val = y[train_idx], y[val_idx]
 
             fold_model = XGBClassifier(**self.params)
+            fit_kwargs = {
+                "eval_set": [(X_val, y_val)],
+                "verbose": False,
+            }
+            if self.early_stopping_rounds and len(y_val) > 0:
+                if SUPPORTS_CALLBACKS:
+                    fit_kwargs["callbacks"] = [
+                        EarlyStopping(
+                            rounds=self.early_stopping_rounds,
+                            save_best=True,
+                            metric_name="auc",
+                        )
+                    ]
+                elif SUPPORTS_EARLY_STOPPING:
+                    fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
             fold_model.fit(
                 X_tr,
                 y_tr,
-                eval_set=[(X_val, y_val)],
-                early_stopping_rounds=self.early_stopping_rounds,
-                verbose=False,
+                **fit_kwargs,
             )
             proba = fold_model.predict_proba(X_val)[:, 1]
             auc = roc_auc_score(y_val, proba)
@@ -172,13 +191,44 @@ class CryptoTrendModel:
             "eval_set": eval_set,
             "verbose": False,
         }
-        if eval_set:
-            fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
+        if eval_set and self.early_stopping_rounds:
+            if SUPPORTS_CALLBACKS:
+                fit_kwargs["callbacks"] = [
+                    EarlyStopping(
+                        rounds=self.early_stopping_rounds,
+                        save_best=True,
+                        metric_name="auc",
+                    )
+                ]
+            elif SUPPORTS_EARLY_STOPPING:
+                fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
 
         self._model.fit(X_train, y_train, **fit_kwargs)
         self._feature_columns = selected
 
-        return {"oof_auc": mean_auc}
+        train_accuracy: float | None = None
+        test_accuracy: float | None = None
+        if len(X_train) > 0:
+            train_pred = self._model.predict(X_train)
+            train_accuracy = float(accuracy_score(y_train, train_pred))
+        if len(X_val) > 0:
+            test_pred = self._model.predict(X_val)
+            test_accuracy = float(accuracy_score(y_val, test_pred))
+
+        if verbose:
+            acc_msg = []
+            if train_accuracy is not None:
+                acc_msg.append(f"train acc={train_accuracy:.4f}")
+            if test_accuracy is not None:
+                acc_msg.append(f"test acc={test_accuracy:.4f}")
+            if acc_msg:
+                print(f"  [{self.symbol}] " + "  ".join(acc_msg))
+
+        return {
+            "oof_auc": mean_auc,
+            "train_accuracy": train_accuracy,
+            "test_accuracy": test_accuracy,
+        }
 
     # ------------------------------------------------------------------
     # Inference

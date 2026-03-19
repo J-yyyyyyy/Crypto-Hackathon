@@ -59,6 +59,10 @@ This fetches the last 1 000 hourly candles for each symbol, engineers features,
 trains an XGBoost classifier with time-series cross-validation and saves one
 model file per symbol to `models/`.
 
+During training you will see both the mean out-of-fold AUC and the accuracy on
+the chronological training window versus a held-out test window, making it easy
+to spot overfitting.
+
 Optional arguments:
 
 | Flag | Default | Description |
