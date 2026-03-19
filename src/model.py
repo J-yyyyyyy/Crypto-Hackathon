@@ -21,16 +21,16 @@ from .feature_engineering import FEATURE_COLUMNS
 DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 
 XGBOOST_PARAMS: dict = {
-    "n_estimators": 300,
-    "max_depth": 5,
+    "n_estimators": 800,
+    "max_depth": 3,
     "learning_rate": 0.05,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "min_child_weight": 3,
-    "gamma": 0.1,
-    "reg_alpha": 0.1,
-    "reg_lambda": 1.0,
-    "eval_metric": "logloss",
+    "subsample": 0.7,
+    "colsample_bytree": 0.7,
+    "min_child_weight": 4,
+    "gamma": 1.0,
+    "reg_alpha": 0.5,
+    "reg_lambda": 2.0,
+    "eval_metric": "auc",
     "random_state": 42,
     "n_jobs": -1,
 }
@@ -56,11 +56,31 @@ class CryptoTrendModel:
         symbol: str,
         model_dir: str = DEFAULT_MODEL_DIR,
         params: dict | None = None,
+        top_features: int = 20,
+        early_stopping_rounds: int = 50,
     ) -> None:
         self.symbol = symbol
         self.model_dir = model_dir
         self.params = params if params is not None else XGBOOST_PARAMS.copy()
+        self.top_features = top_features
+        self.early_stopping_rounds = early_stopping_rounds
         self._model: XGBClassifier | None = None
+        self._feature_columns: list[str] | None = None
+
+    def _select_top_features(
+        self, df: pd.DataFrame, candidate_columns: list[str]
+    ) -> list[str]:
+        """Select most stable predictors via correlation with the target."""
+        corr = (
+            df[candidate_columns + ["target"]]
+            .corr()["target"]
+            .drop("target")
+            .abs()
+            .dropna()
+        )
+        ranked = corr.sort_values(ascending=False)
+        keep = ranked.head(self.top_features).index.tolist()
+        return keep if keep else candidate_columns
 
     # ------------------------------------------------------------------
     # Training
@@ -93,7 +113,8 @@ class CryptoTrendModel:
             ``{"oof_auc": float}`` — average out-of-fold ROC-AUC score.
         """
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
-        X = df[available].values
+        selected = self._select_top_features(df, available)
+        X = df[selected].values
         y = df["target"].values
 
         tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -105,8 +126,10 @@ class CryptoTrendModel:
 
             fold_model = XGBClassifier(**self.params)
             fold_model.fit(
-                X_tr, y_tr,
+                X_tr,
+                y_tr,
                 eval_set=[(X_val, y_val)],
+                early_stopping_rounds=self.early_stopping_rounds,
                 verbose=False,
             )
             proba = fold_model.predict_proba(X_val)[:, 1]
@@ -120,9 +143,22 @@ class CryptoTrendModel:
             print(f"  [{self.symbol}] mean OOF AUC = {mean_auc:.4f}")
 
         # Re-train on the full data set
+        split_idx = int(len(X) * 0.8)
+        split_idx = min(max(split_idx, 1), len(X) - 1)
+        X_train, X_val = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
+
         self._model = XGBClassifier(**self.params)
-        self._model.fit(X, y, verbose=False)
-        self._feature_columns = available
+        eval_set = [(X_val, y_val)] if len(X_val) > 0 else []
+        fit_kwargs = {
+            "eval_set": eval_set,
+            "verbose": False,
+        }
+        if eval_set:
+            fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
+
+        self._model.fit(X_train, y_train, **fit_kwargs)
+        self._feature_columns = selected
 
         return {"oof_auc": mean_auc}
 
@@ -149,6 +185,8 @@ class CryptoTrendModel:
                 f"Model for {self.symbol} is not trained. "
                 "Call train() or load() first."
             )
+        if not self._feature_columns:
+            raise RuntimeError("Model metadata missing feature columns.")
         available = [c for c in self._feature_columns if c in df.columns]
         X = df[available].values
         return self._model.predict_proba(X)[:, 1]

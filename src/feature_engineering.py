@@ -119,6 +119,27 @@ def add_momentum(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_stationary_transforms(df: pd.DataFrame, window: int = 24) -> pd.DataFrame:
+    """Rolling z-scores / percentile ranks to stabilise feature scales over time."""
+    returns = df["close"].pct_change()
+    ret_mean = returns.rolling(window).mean()
+    ret_std = returns.rolling(window).std()
+    df["return_zscore_24"] = (returns - ret_mean) / ret_std.replace(0, np.nan)
+
+    vol_mean = df["volume"].rolling(window).mean()
+    vol_std = df["volume"].rolling(window).std()
+    df["volume_zscore_24"] = (df["volume"] - vol_mean) / vol_std.replace(0, np.nan)
+
+    def _percentile_rank(arr: np.ndarray) -> float:
+        sorted_arr = np.sort(arr)
+        return float(np.searchsorted(sorted_arr, arr[-1]) / (len(arr) - 1))
+
+    df["close_percentile_24"] = df["close"].rolling(window).apply(
+        _percentile_rank, raw=True
+    )
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
@@ -153,6 +174,7 @@ def build_features(df: pd.DataFrame, horizon: int = 4) -> pd.DataFrame:
     df = add_price_features(df)
     df = add_volume_features(df)
     df = add_momentum(df)
+    df = add_stationary_transforms(df)
 
     # Target: 1 if close price `horizon` candles ahead is higher than current
     df["target"] = (df["close"].shift(-horizon) > df["close"]).astype(int)
@@ -185,4 +207,5 @@ FEATURE_COLUMNS = [
     "body_ratio", "upper_wick", "lower_wick", "hl_spread",
     "volume_ma_7", "volume_ma_14", "rel_volume", "taker_buy_ratio",
     "roc_3", "roc_6", "roc_12", "roc_24",
+    "return_zscore_24", "volume_zscore_24", "close_percentile_24",
 ]
