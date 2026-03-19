@@ -32,7 +32,8 @@ rise in the next **4 hours** for 10 major cryptocurrency pairs traded on Binance
     ├── feature_engineering.py# Computes technical indicators / features
     ├── model.py              # XGBoost wrapper (train, save, load, predict)
     ├── train.py              # CLI training script
-    └── predict.py            # CLI prediction script
+    ├── predict.py            # CLI prediction script
+    └── backtest.py           # CLI backtest / evaluation script
 ```
 
 ---
@@ -65,7 +66,7 @@ Optional arguments:
 |------|---------|-------------|
 | `--symbols` | all 10 | Space-separated list of symbols to train |
 | `--interval` | `1h` | Binance kline interval |
-| `--limit` | `1000` | Number of historical candles (max 1 000) |
+| `--limit` | `1000` | Number of historical candles (max 1,000) |
 | `--splits` | `5` | Time-series CV folds |
 
 ### 2. Make predictions
@@ -103,6 +104,72 @@ JSON output example:
   }
 }
 ```
+
+---
+
+## Backtesting
+
+The backtest module evaluates prediction effectiveness by training on the
+earlier portion of the historical data and testing on the later, unseen
+portion — with **no look-ahead bias**.
+
+### 3. Run a backtest
+
+```bash
+python -m src.backtest
+```
+
+For each symbol the backtest:
+
+1. Fetches 1 000 hourly candles.
+2. Splits the data chronologically (default 70 % train / 30 % test).
+3. Trains an XGBoost model on the training window using time-series CV.
+4. Predicts on the held-out test window.
+5. Reports:
+   - **Training improvement**: side-by-side OOF AUC (training) vs. test AUC.
+     A test AUC consistently above 0.50 confirms the model generalises to
+     unseen data rather than memorising the training set.
+   - **Signal quality**: accuracy, precision, recall, F1.
+   - **Trading simulation**: a simple long-only strategy that enters at the
+     close price when the predicted probability exceeds the threshold and
+     holds for 4 hours.  Reports win rate, cumulative return vs. buy-and-hold,
+     maximum drawdown and annualised Sharpe ratio.
+
+Example output:
+
+```
+====================================================
+  Backtest: BTCUSDT
+====================================================
+  Period      : train 659 bars / test 283 bars
+  Train OOF AUC : 0.5812   │   Test AUC : 0.5634
+
+  Signal Quality (test period, threshold=0.55):
+    Accuracy  : 0.5406
+    Precision : 0.5714
+    Recall    : 0.4512
+    F1-Score  : 0.5040
+
+  Trading Simulation (long-only, threshold=0.55, hold=4h, no fees):
+    Trades       : 31
+    Win Rate     : 58.1%
+    Total Return : +4.92%
+    Buy & Hold   : +3.17%
+    Max Drawdown : -5.43%
+    Sharpe Ratio : 1.18
+```
+
+Optional arguments:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--symbols` | all 10 | Space-separated list of symbols |
+| `--interval` | `1h` | Binance kline interval |
+| `--limit` | `1000` | Number of historical candles (max 1,000) |
+| `--train-ratio` | `0.7` | Fraction of data used for training |
+| `--threshold` | `0.55` | Minimum probability to trigger a trade |
+| `--splits` | `5` | Time-series CV folds during training |
+| `--json` | off | Output all results as JSON |
 
 ---
 
