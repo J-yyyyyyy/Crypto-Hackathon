@@ -23,11 +23,6 @@ from .model import CryptoTrendModel, XGBOOST_PARAMS
 
 TARGET_CONFIGS = [
     {"name": "primitive", "target_col": "target", "variant": None},
-    {
-        "name": "return_1pct",
-        "target_col": "target_return_1pct",
-        "variant": "return_1pct",
-    },
 ]
 
 MIN_TRAIN_SAMPLES = 100
@@ -163,10 +158,24 @@ def train_symbol(
         if verbose:
             train_acc = metrics.get("train_accuracy")
             test_acc = metrics.get("test_accuracy")
+            train_prec = metrics.get("train_precision")
+            test_prec = metrics.get("test_precision")
+            train_rec = metrics.get("train_recall")
+            test_rec = metrics.get("test_recall")
+            train_f1 = metrics.get("train_f1")
+            test_f1 = metrics.get("test_f1")
             train_acc_fmt = f"{train_acc:.4f}" if train_acc is not None else "N/A"
             test_acc_fmt = f"{test_acc:.4f}" if test_acc is not None else "N/A"
+            train_prec_fmt = f"{train_prec:.4f}" if train_prec is not None else "N/A"
+            test_prec_fmt = f"{test_prec:.4f}" if test_prec is not None else "N/A"
+            train_rec_fmt = f"{train_rec:.4f}" if train_rec is not None else "N/A"
+            test_rec_fmt = f"{test_rec:.4f}" if test_rec is not None else "N/A"
+            train_f1_fmt = f"{train_f1:.4f}" if train_f1 is not None else "N/A"
+            test_f1_fmt = f"{test_f1:.4f}" if test_f1 is not None else "N/A"
             print(
-                f"  Accuracy ({cfg['name']}) — train: {train_acc_fmt}  test: {test_acc_fmt}"
+                f"  Metrics ({cfg['name']}) — "
+                f"train: acc={train_acc_fmt} prec={train_prec_fmt} rec={train_rec_fmt} f1={train_f1_fmt}  "
+                f"test: acc={test_acc_fmt} prec={test_prec_fmt} rec={test_rec_fmt} f1={test_f1_fmt}"
             )
             print(f"  Feature columns used ({cfg['name']}): {len(metrics['features'])}")
 
@@ -232,11 +241,25 @@ def main() -> None:
         auc = f"{r['oof_auc']:.4f}" if r.get("oof_auc") is not None else "N/A"
         train_acc = r.get("train_accuracy")
         test_acc = r.get("test_accuracy")
+        train_prec = r.get("train_precision")
+        test_prec = r.get("test_precision")
+        train_rec = r.get("train_recall")
+        test_rec = r.get("test_recall")
+        train_f1 = r.get("train_f1")
+        test_f1 = r.get("test_f1")
         train_acc_fmt = f"{train_acc:.4f}" if train_acc is not None else "N/A"
         test_acc_fmt = f"{test_acc:.4f}" if test_acc is not None else "N/A"
+        train_prec_fmt = f"{train_prec:.4f}" if train_prec is not None else "N/A"
+        test_prec_fmt = f"{test_prec:.4f}" if test_prec is not None else "N/A"
+        train_rec_fmt = f"{train_rec:.4f}" if train_rec is not None else "N/A"
+        test_rec_fmt = f"{test_rec:.4f}" if test_rec is not None else "N/A"
+        train_f1_fmt = f"{train_f1:.4f}" if train_f1 is not None else "N/A"
+        test_f1_fmt = f"{test_f1:.4f}" if test_f1 is not None else "N/A"
         print(
             f"  {r['symbol']:<10} [{r['target']:<11}] "
-            f"OOF AUC={auc}  train_acc={train_acc_fmt}  test_acc={test_acc_fmt}  "
+            f"OOF AUC={auc}  "
+            f"train(acc/prec/rec/f1)={train_acc_fmt}/{train_prec_fmt}/{train_rec_fmt}/{train_f1_fmt}  "
+            f"test(acc/prec/rec/f1)={test_acc_fmt}/{test_prec_fmt}/{test_rec_fmt}/{test_f1_fmt}  "
             f"status={r['status']}"
         )
         if r.get("baselines"):

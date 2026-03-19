@@ -2,15 +2,13 @@
 Feature engineering for the XGBoost crypto trend prediction model.
 
 All features are computed from OHLCV candlestick data and represent
-standard technical analysis indicators. Two targets are produced:
-the original binary rise/fall label and a thresholded label that
-requires >1% forward return for a positive class.
+standard technical analysis indicators. A single binary target is
+produced: whether the close price ``horizon`` candles ahead exceeds
+the current close.
 """
 
 import numpy as np
 import pandas as pd
-
-RETURN_THRESHOLD = 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +225,8 @@ def build_features(df: pd.DataFrame, horizon: int = 4) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Feature DataFrame with ``target`` and ``target_return_1pct`` columns
-        (1 = price rises). Rows with NaN values (warm-up period) are dropped.
+        Feature DataFrame with a ``target`` column (1 = price rises). Rows with
+        NaN values (warm-up period) are dropped.
     """
     df = df.copy()
 
@@ -252,10 +250,6 @@ def build_features(df: pd.DataFrame, horizon: int = 4) -> pd.DataFrame:
     future_close = df["close"].shift(-horizon)
     current_close = df["close"]
     df["target"] = (future_close > current_close).astype(int)
-    df["target_return_1pct"] = (
-        (future_close - current_close) / current_close.replace(0, np.nan)
-        > RETURN_THRESHOLD
-    ).astype(int)
 
     # Drop raw OHLCV columns that are not features
     drop_cols = [

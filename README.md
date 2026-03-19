@@ -2,10 +2,8 @@
 
 A Python project that uses **XGBoost** to predict the probability of a price
 rise in the next **4 hours** for 10 major cryptocurrency pairs traded on Binance.
-Two label definitions are supported during training and prediction:
-
-- **Primitive**: future close > current close
-- **1% threshold**: future close is at least **1%** higher than current close
+The training target is whether the close price 4 candles ahead is above the
+current close.
 
 ## Supported Symbols
 
@@ -60,15 +58,15 @@ python -m src.train
 ```
 
 This fetches the last 1 000 hourly candles for each symbol, engineers features,
-trains two XGBoost classifiers per symbol (primitive vs. 1% return targets) with
+trains an XGBoost classifier per symbol with
 time-series cross-validation, a small regularization grid search, feature
 importance pruning, and simple baselines for comparison. One model file per
-target variant is saved to `models/`.
+symbol is saved to `models/`.
 
-During training you will see the mean out-of-fold AUC, the accuracy on the
-chronological training window versus a held-out test window, baseline scores,
-and which parameter set won the grid search — making it easy to spot
-overfitting.
+During training you will see the mean out-of-fold AUC, accuracy, precision,
+recall, F1 on the chronological training window versus a held-out test window,
+baseline scores, and which parameter set won the grid search — making it easy
+to spot overfitting.
 
 Optional arguments:
 
@@ -87,8 +85,7 @@ python -m src.predict
 
 Fetches the latest candles, applies feature engineering and outputs the
 **probability of an upward price move** over the next 4 hours for each symbol.
-Use `--target-type` to pick which trained label to load (`primitive` or
-`return_1pct`).
+The saved model reflects the primitive target (future close > current close).
 
 ```
 === 4-Hour Uptrend Probability ===
@@ -104,7 +101,7 @@ Optional arguments:
 | `--symbols` | all 10 | Space-separated list of symbols |
 | `--interval` | `1h` | Binance kline interval |
 | `--json` | off | Output results as JSON |
-| `--target-type` | `primitive` | Which trained target variant to load |
+| `--limit` | `200` | Candles to fetch for feature calculation |
 
 JSON output example:
 
@@ -154,9 +151,7 @@ data before any feature selection:
 ## Model Details
 
 - **Algorithm**: XGBoost binary classifier (`XGBClassifier`)
-- **Targets**:
-  - Primitive: close price 4 candles ahead > current close
-  - Threshold: forward return > **1%**
+- **Target**: close price 4 candles ahead > current close
 - **Regularization**: small grid search across stronger regularization options,
   early stopping, feature-importance pruning after correlation pre-filtering
 - **Validation**: Time-series cross-validation (`TimeSeriesSplit`, 5 folds) +
