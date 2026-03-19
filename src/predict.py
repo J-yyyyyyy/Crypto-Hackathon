@@ -22,15 +22,7 @@ from .feature_engineering import build_features
 from .model import CryptoTrendModel
 
 
-TARGET_MAP = {
-    "primitive": None,
-    "return_1pct": "return_1pct",
-}
-
-
-def predict_symbol(
-    symbol: str, interval: str = "1h", limit: int = 200, target_type: str = "primitive"
-) -> float:
+def predict_symbol(symbol: str, interval: str = "1h", limit: int = 200) -> float:
     """
     Load the saved model for *symbol* and return the probability of a price
     rise in the next 4 candles (≈ 4 hours with 1-h candles).
@@ -50,13 +42,10 @@ def predict_symbol(
     float
         Probability in [0, 1].
     """
-    if target_type not in TARGET_MAP:
-        raise ValueError(f"Unknown target_type '{target_type}'")
-
     df_raw = fetch_klines(symbol, interval=interval, limit=limit)
     df_feat = build_features(df_raw, horizon=4)
 
-    model = CryptoTrendModel(symbol=symbol, variant=TARGET_MAP[target_type])
+    model = CryptoTrendModel(symbol=symbol)
     model.load()
 
     return model.predict_latest(df_feat)
@@ -85,10 +74,10 @@ def main() -> None:
         help="Output results as JSON.",
     )
     parser.add_argument(
-        "--target-type",
-        choices=sorted(TARGET_MAP.keys()),
-        default="primitive",
-        help="Which trained target variant to load (default: primitive).",
+        "--limit",
+        type=int,
+        default=200,
+        help="Number of candles to fetch for feature calculation (default: 200).",
     )
     args = parser.parse_args()
 
@@ -97,9 +86,7 @@ def main() -> None:
 
     for symbol in args.symbols:
         try:
-            prob = predict_symbol(
-                symbol, interval=args.interval, target_type=args.target_type
-            )
+            prob = predict_symbol(symbol, interval=args.interval, limit=args.limit)
             predictions[symbol] = round(prob, 6)
         except (FileNotFoundError, RuntimeError, ValueError, KeyError) as exc:
             errors[symbol] = str(exc)

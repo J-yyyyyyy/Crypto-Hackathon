@@ -17,7 +17,11 @@ import pandas as pd
 from xgboost import XGBClassifier
 from xgboost.callback import EarlyStopping
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    roc_auc_score,
+)
 
 from .feature_engineering import FEATURE_COLUMNS
 
@@ -322,12 +326,29 @@ class CryptoTrendModel:
 
         train_accuracy: float | None = None
         test_accuracy: float | None = None
+        train_precision: float | None = None
+        train_recall: float | None = None
+        train_f1: float | None = None
+        test_precision: float | None = None
+        test_recall: float | None = None
+        test_f1: float | None = None
+
+        def _compute_prf(true, pred):
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                true,
+                pred,
+                average="binary",
+                zero_division=0,
+            )
+            return float(precision), float(recall), float(f1)
         if len(X_train) > 0:
             train_pred = self._model.predict(X_train)
             train_accuracy = float(accuracy_score(y_train, train_pred))
+            train_precision, train_recall, train_f1 = _compute_prf(y_train, train_pred)
         if len(X_val) > 0:
             test_pred = self._model.predict(X_val)
             test_accuracy = float(accuracy_score(y_val, test_pred))
+            test_precision, test_recall, test_f1 = _compute_prf(y_val, test_pred)
 
         feature_importance = []
         if hasattr(self._model, "feature_importances_"):
@@ -340,9 +361,15 @@ class CryptoTrendModel:
         if verbose:
             acc_msg = []
             if train_accuracy is not None:
-                acc_msg.append(f"train acc={train_accuracy:.4f}")
+                acc_msg.append(
+                    f"train acc={train_accuracy:.4f} "
+                    f"prec={train_precision:.4f} rec={train_recall:.4f} f1={train_f1:.4f}"
+                )
             if test_accuracy is not None:
-                acc_msg.append(f"test acc={test_accuracy:.4f}")
+                acc_msg.append(
+                    f"test acc={test_accuracy:.4f} "
+                    f"prec={test_precision:.4f} rec={test_recall:.4f} f1={test_f1:.4f}"
+                )
             if acc_msg:
                 print(f"  [{self.symbol}] " + "  ".join(acc_msg))
 
@@ -351,6 +378,12 @@ class CryptoTrendModel:
             "fold_aucs": best_folds,
             "train_accuracy": train_accuracy,
             "test_accuracy": test_accuracy,
+            "train_precision": train_precision,
+            "train_recall": train_recall,
+            "train_f1": train_f1,
+            "test_precision": test_precision,
+            "test_recall": test_recall,
+            "test_f1": test_f1,
             "params": self.params,
             "features": selected,
             "importance_ranking": importance_ranking or feature_importance,
