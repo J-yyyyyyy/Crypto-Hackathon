@@ -140,7 +140,17 @@ def train_symbol(
         print(f"\nTraining model for {symbol} …")
 
     df_raw = fetch_klines(symbol, interval=interval, limit=limit)
-    df_feat = build_features(df_raw, horizon=4)
+    btc_ref = None
+    if symbol.upper() != "BTCUSDT":
+        btc_ref = fetch_klines("BTCUSDT", interval=interval, limit=limit)
+    df_feat = build_features(
+        df_raw,
+        horizon=4,
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+        btc_df=btc_ref,
+    )
 
     if len(df_feat) < MIN_TRAIN_SAMPLES:
         msg = (
@@ -166,7 +176,8 @@ def train_symbol(
             symbol=symbol,
             variant=variant,
             target_column=target_col,
-            importance_threshold=0.0,
+            importance_threshold=0.01,
+            val_gap=24,
         )
         metrics = model.train(
             df_feat,
@@ -174,6 +185,7 @@ def train_symbol(
             verbose=verbose,
             target_column=target_col,
             param_grid=REGULARIZATION_GRID,
+            bayes_trials=20,
         )
         path = model.save()
         baselines = evaluate_baselines(df_feat, target_col=target_col)
@@ -237,7 +249,7 @@ def main() -> None:
     parser.add_argument(
         "--limit",
         type=int,
-        default=5000,
+        default=20000,
         help="Number of historical candles per symbol (walk-back up to limit).",
     )
     parser.add_argument(

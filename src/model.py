@@ -14,6 +14,7 @@ from inspect import signature
 import joblib
 import numpy as np
 import pandas as pd
+import optuna
 from xgboost import XGBClassifier
 from xgboost.callback import EarlyStopping
 from sklearn.metrics import (
@@ -21,13 +22,15 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     roc_auc_score,
 )
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.feature_selection import RFECV
 
 from .feature_engineering import FEATURE_COLUMNS
 
 DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 
 XGBOOST_PARAMS: dict = {
-    "n_estimators": 800,
+    "n_estimators": 1200,
     "max_depth": 3,
     "learning_rate": 0.05,
     "subsample": 0.7,
@@ -77,10 +80,13 @@ class CryptoTrendModel:
         model_dir: str = DEFAULT_MODEL_DIR,
         params: dict | None = None,
         top_features: int = 20,
-        early_stopping_rounds: int = 50,
+        early_stopping_rounds: int = 100,
         variant: str | None = None,
         target_column: str = "target",
-        importance_threshold: float = 0.0,
+        importance_threshold: float = 0.01,
+        correlation_threshold: float = 0.95,
+        val_gap: int = 0,
+        n_bag_models: int = 3,
     ) -> None:
         self.symbol = symbol
         self.model_dir = model_dir
@@ -90,8 +96,12 @@ class CryptoTrendModel:
         self.variant = variant
         self.target_column = target_column
         self.importance_threshold = importance_threshold
+        self.correlation_threshold = correlation_threshold
+        self.val_gap = val_gap
+        self.n_bag_models = n_bag_models
         self._model: XGBClassifier | None = None
         self._feature_columns: list[str] | None = None
+        self._bag_models: list[XGBClassifier] = []
 
     def _select_top_features(
         self, df: pd.DataFrame, candidate_columns: list[str]
@@ -113,6 +123,44 @@ class CryptoTrendModel:
             f"using all {len(candidate_columns)} features."
         )
         return candidate_columns
+
+    def _drop_correlated(
+        self, df: pd.DataFrame, columns: list[str], threshold: float
+    ) -> list[str]:
+        """Remove highly correlated features to reduce redundancy."""
+        if not columns:
+            return columns
+        corr_matrix = df[columns].corr().abs()
+        upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape, dtype=bool), k=1))
+        to_drop = {
+            column
+            for column in upper_tri.columns
+            if any(upper_tri[column].fillna(0) > threshold)
+        }
+        return [c for c in columns if c not in to_drop]
+
+    def _rfecv_features(
+        self, df: pd.DataFrame, columns: list[str], params: dict, n_splits: int
+    ) -> list[str]:
+        """Recursive feature elimination with time-series CV."""
+        if len(columns) <= 2:
+            return columns
+        estimator = XGBClassifier(**params)
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        rfecv = RFECV(
+            estimator=estimator,
+            step=1,
+            cv=tscv,
+            scoring="roc_auc",
+            n_jobs=-1,
+        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            rfecv.fit(df[columns].values, df[self.target_column].values)
+        mask = getattr(rfecv, "support_", None)
+        if mask is None or not mask.any():
+            return columns
+        return [col for col, keep in zip(columns, mask) if keep]
 
     def _prune_with_importance(
         self,
@@ -156,7 +204,11 @@ class CryptoTrendModel:
             start_val = end_val - val_size
             if start_val <= 0 or start_val >= end_val:
                 continue
-            train_idx = np.arange(0, start_val)
+            gap = max(int(self.val_gap), 0)
+            if start_val <= gap:
+                continue
+            train_end = max(start_val - gap, 0)
+            train_idx = np.arange(0, train_end)
             val_idx = np.arange(start_val, end_val)
             if len(train_idx) == 0 or len(val_idx) == 0:
                 continue
@@ -225,6 +277,48 @@ class CryptoTrendModel:
 
         return float(np.mean(oof_aucs)), oof_aucs
 
+    def _bayes_optimize(
+        self,
+        df: pd.DataFrame,
+        columns: list[str],
+        n_splits: int,
+        n_trials: int = 20,
+        timeout: int | None = None,
+        base_params: dict | None = None,
+    ) -> dict:
+        """Bayesian hyper-parameter search via Optuna."""
+
+        def objective(trial: optuna.Trial) -> float:
+            params = (base_params or self.params).copy()
+            params.update(
+                {
+                    "max_depth": trial.suggest_int("max_depth", 2, 6),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+                    "subsample": trial.suggest_float("subsample", 0.5, 0.9),
+                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+                    "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
+                    "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 10.0),
+                    "min_child_weight": trial.suggest_float("min_child_weight", 1.0, 15.0),
+                    "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+                    "n_estimators": trial.suggest_int("n_estimators", 400, 1600),
+                }
+            )
+            mean_auc, _ = self._cross_val_auc(
+                df,
+                columns,
+                params,
+                n_splits=n_splits,
+                verbose=False,
+                label="bayes",
+                threshold=self.importance_threshold,
+            )
+            return mean_auc
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=n_trials, timeout=timeout)
+        return {**self.params, **study.best_params}
+
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
@@ -237,6 +331,7 @@ class CryptoTrendModel:
         target_column: str | None = None,
         param_grid: list[dict] | None = None,
         importance_threshold: float | None = None,
+        bayes_trials: int = 15,
     ) -> dict:
         """
         Train on a feature DataFrame that contains a target column.
@@ -277,6 +372,7 @@ class CryptoTrendModel:
         )
 
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
+        available = self._drop_correlated(df, available, self.correlation_threshold)
         y = df[self.target_column].values
 
         # Handle class imbalance by up-weighting the minority class.
@@ -289,7 +385,19 @@ class CryptoTrendModel:
         else:
             scale_pos_weight = neg / pos
 
-        base_candidates = param_grid if param_grid else [self.params]
+        base_params = self.params.copy()
+        base_params["scale_pos_weight"] = scale_pos_weight
+        base_candidates = param_grid if param_grid else [base_params]
+        # Bayesian optimization to enrich candidate pool
+        if bayes_trials and bayes_trials > 0:
+            try:
+                bayes_params = self._bayes_optimize(
+                    df, available, n_splits=n_splits, n_trials=bayes_trials, base_params=base_params
+                )
+                base_candidates.append(bayes_params)
+            except Exception as exc:
+                if verbose:
+                    print(f"  [{self.symbol}] Optuna search failed: {exc}")
         candidates = []
         for params in base_candidates:
             candidate = params.copy()
@@ -330,6 +438,12 @@ class CryptoTrendModel:
 
         # Determine feature set on full data for final training
         selected = self._select_top_features(df, available)
+        if len(selected) > 2:
+            selected = self._drop_correlated(df, selected, self.correlation_threshold)
+        if len(selected) > 2:
+            selected = self._rfecv_features(
+                df, selected, self.params, n_splits=n_splits
+            )
         importance_ranking: list[tuple[str, float]] = []
         if threshold is not None:
             selected, importance_ranking = self._prune_with_importance(
@@ -352,9 +466,15 @@ class CryptoTrendModel:
         val_size = min(min_required, max_allowed)
         if len(X) - val_size < 1:
             val_size = max(1, len(X) - 1)
-        split_idx = len(X) - val_size
-        X_train, X_val = X[:split_idx], X[split_idx:]
-        y_train, y_val = y[:split_idx], y[split_idx:]
+        gap = max(int(self.val_gap), 0)
+        val_start = len(X) - val_size
+        desired_train_end = val_start - gap
+        min_train = max(50, val_size, 1)
+        max_train = max(val_start - 1, 1)
+        # Clamp train_end to enforce gap (no overlap), minimum train size, and bounds
+        train_end = min(max(desired_train_end, min_train), max_train)
+        X_train, X_val = X[:train_end], X[val_start:]
+        y_train, y_val = y[:train_end], y[val_start:]
 
         self._model = XGBClassifier(**self.params)
         eval_set = [(X_val, y_val)] if len(X_val) > 0 else []
@@ -374,7 +494,17 @@ class CryptoTrendModel:
             elif SUPPORTS_EARLY_STOPPING:
                 fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
 
-        self._model.fit(X_train, y_train, **fit_kwargs)
+        # Bagging ensemble with different seeds (size = n_bag_models); base random_state is defined in XGBOOST_PARAMS
+        self._bag_models = []
+        for seed in range(self.n_bag_models):
+            bag_params = self.params.copy()
+            bag_params["random_state"] = bag_params.get("random_state", 42) + seed
+            bag_model = XGBClassifier(**bag_params)
+            bag_model.fit(X_train, y_train, **fit_kwargs)
+            self._bag_models.append(bag_model)
+        # Keep the first model for backward compatibility with save/load APIs
+        self._model = self._bag_models[0]
+
         self._feature_columns = selected
 
         train_accuracy: float | None = None
@@ -473,7 +603,9 @@ class CryptoTrendModel:
             )
         available = [c for c in self._feature_columns if c in df.columns]
         X = df[available].values
-        return self._model.predict_proba(X)[:, 1]
+        models = self._bag_models or [self._model]
+        probas = [m.predict_proba(X)[:, 1] for m in models]
+        return np.mean(probas, axis=0)
 
     def predict_latest(self, df: pd.DataFrame) -> float:
         """
@@ -507,6 +639,7 @@ class CryptoTrendModel:
             raise RuntimeError("No trained model to save.")
         payload = {
             "model": self._model,
+            "bag_models": self._bag_models,
             "feature_columns": self._feature_columns,
             "symbol": self.symbol,
             "params": self.params,
@@ -527,6 +660,7 @@ class CryptoTrendModel:
             )
         payload = joblib.load(path)
         self._model = payload["model"]
+        self._bag_models = payload.get("bag_models", [self._model])
         self._feature_columns = payload["feature_columns"]
         self.params = payload.get("params", self.params)
         self.variant = payload.get("variant", self.variant)

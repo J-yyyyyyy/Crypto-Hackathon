@@ -43,7 +43,17 @@ def predict_symbol(symbol: str, interval: str = "1h", limit: int = 200) -> float
         Probability in [0, 1].
     """
     df_raw = fetch_klines(symbol, interval=interval, limit=limit)
-    df_feat = build_features(df_raw, horizon=4)
+    btc_ref = None
+    if symbol.upper() != "BTCUSDT":
+        btc_ref = fetch_klines("BTCUSDT", interval=interval, limit=limit)
+    df_feat = build_features(
+        df_raw,
+        horizon=4,
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+        btc_df=btc_ref,
+    )
 
     model = CryptoTrendModel(symbol=symbol)
     model.load()

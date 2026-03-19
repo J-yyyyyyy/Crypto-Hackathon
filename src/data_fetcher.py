@@ -42,7 +42,7 @@ KLINE_COLUMNS = [
 def fetch_klines(
     symbol: str,
     interval: str = "1h",
-    limit: int = 5000,
+    limit: int = 20000,
     retries: int = 3,
     backoff: float = 2.0,
 ) -> pd.DataFrame:
