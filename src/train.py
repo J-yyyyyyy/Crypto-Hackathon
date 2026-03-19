@@ -23,7 +23,11 @@ from .model import CryptoTrendModel, XGBOOST_PARAMS
 
 TARGET_CONFIGS = [
     {"name": "primitive", "target_col": "target", "variant": None},
-    {"name": "return_1pct", "target_col": "target_return_1pct", "variant": "return1pct"},
+    {
+        "name": "return_1pct",
+        "target_col": "target_return_1pct",
+        "variant": "return_1pct",
+    },
 ]
 
 MIN_TRAIN_SAMPLES = 100

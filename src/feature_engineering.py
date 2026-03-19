@@ -98,6 +98,7 @@ def add_volatility_context(df: pd.DataFrame) -> pd.DataFrame:
     pct_returns = df["close"].pct_change()
     for window in [6, 24]:
         df[f"realized_volatility_{window}"] = (
+            # Scale by sqrt(window) so volatility is comparable across horizons
             pct_returns.rolling(window).std() * np.sqrt(window)
         )
     df["atr_pct"] = df["atr_14"] / df["close"].replace(0, np.nan)

@@ -42,6 +42,7 @@ MIN_VAL_SAMPLES = 10
 MIN_VAL_RATIO = 0.1
 MAX_VAL_RATIO = 0.2
 IMPORTANCE_ESTIMATORS_CAP = 300
+IMPORTANCE_ESTIMATORS_BASE = 200
 
 _FIT_PARAMS = signature(XGBClassifier.fit).parameters
 SUPPORTS_CALLBACKS = "callbacks" in _FIT_PARAMS
@@ -120,7 +121,8 @@ class CryptoTrendModel:
         """Use XGBoost feature importances to drop uninformative predictors."""
         quick_params = params.copy()
         quick_params["n_estimators"] = min(
-            quick_params.get("n_estimators", 200), IMPORTANCE_ESTIMATORS_CAP
+            quick_params.get("n_estimators", IMPORTANCE_ESTIMATORS_BASE),
+            IMPORTANCE_ESTIMATORS_CAP,
         )
         model = XGBClassifier(**quick_params)
         model.fit(
@@ -267,7 +269,7 @@ class CryptoTrendModel:
 
         importance_ranking: list[tuple[str, float]] = []
         if threshold is not None:
-            # threshold=0.0 still prunes zero-importance predictors
+            # threshold=0.0 keeps only positively important predictors
             pruned, importance_ranking = self._prune_with_importance(
                 df, selected, self.params, threshold=threshold
             )

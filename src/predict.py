@@ -24,7 +24,7 @@ from .model import CryptoTrendModel
 
 TARGET_MAP = {
     "primitive": None,
-    "return_1pct": "return1pct",
+    "return_1pct": "return_1pct",
 }
 
 
