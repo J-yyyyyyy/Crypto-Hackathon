@@ -41,6 +41,8 @@ XGBOOST_PARAMS: dict = {
 MIN_VAL_SAMPLES = 10
 MIN_VAL_RATIO = 0.1
 MAX_VAL_RATIO = 0.2
+IMPORTANCE_ESTIMATORS_CAP = 300
+IMPORTANCE_ESTIMATORS_BASE = 200
 
 _FIT_PARAMS = signature(XGBClassifier.fit).parameters
 SUPPORTS_CALLBACKS = "callbacks" in _FIT_PARAMS
@@ -60,6 +62,10 @@ class CryptoTrendModel:
         Directory used for saving / loading model files.
     params : dict | None
         XGBoost hyper-parameters.  Defaults to ``XGBOOST_PARAMS``.
+    variant : str | None
+        Optional variant tag used to distinguish multiple targets per symbol.
+    target_column : str
+        Name of the target column inside the feature DataFrame.
     """
 
     def __init__(
@@ -69,12 +75,18 @@ class CryptoTrendModel:
         params: dict | None = None,
         top_features: int = 20,
         early_stopping_rounds: int = 50,
+        variant: str | None = None,
+        target_column: str = "target",
+        importance_threshold: float = 0.0,
     ) -> None:
         self.symbol = symbol
         self.model_dir = model_dir
         self.params = params if params is not None else XGBOOST_PARAMS.copy()
         self.top_features = top_features
         self.early_stopping_rounds = early_stopping_rounds
+        self.variant = variant
+        self.target_column = target_column
+        self.importance_threshold = importance_threshold
         self._model: XGBClassifier | None = None
         self._feature_columns: list[str] | None = None
 
@@ -83,9 +95,9 @@ class CryptoTrendModel:
     ) -> list[str]:
         """Select most stable predictors via correlation with the target."""
         corr = (
-            df[candidate_columns + ["target"]]
-            .corr()["target"]
-            .drop("target")
+            df[candidate_columns + [self.target_column]]
+            .corr()[self.target_column]
+            .drop(self.target_column)
             .abs()
             .dropna()
         )
@@ -99,41 +111,43 @@ class CryptoTrendModel:
         )
         return candidate_columns
 
-    # ------------------------------------------------------------------
-    # Training
-    # ------------------------------------------------------------------
-
-    def train(
+    def _prune_with_importance(
         self,
         df: pd.DataFrame,
-        n_splits: int = 5,
-        verbose: bool = True,
-    ) -> dict:
-        """
-        Train on a feature DataFrame that contains a ``target`` column.
+        feature_columns: list[str],
+        params: dict,
+        threshold: float,
+    ) -> tuple[list[str], list[tuple[str, float]]]:
+        """Use XGBoost feature importances to drop uninformative predictors."""
+        quick_params = params.copy()
+        quick_params["n_estimators"] = min(
+            quick_params.get("n_estimators", IMPORTANCE_ESTIMATORS_BASE),
+            IMPORTANCE_ESTIMATORS_CAP,
+        )
+        model = XGBClassifier(**quick_params)
+        model.fit(
+            df[feature_columns].values,
+            df[self.target_column].values,
+            verbose=False,
+        )
+        importances = model.feature_importances_
+        ranked = sorted(
+            zip(feature_columns, importances), key=lambda kv: kv[1], reverse=True
+        )
+        keep = [feat for feat, score in ranked if score > threshold]
+        if not keep:
+            keep = feature_columns
+        return keep, ranked
 
-        Uses time-series cross-validation to report out-of-fold AUC before
-        fitting the final model on all available data.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            Feature matrix with ``FEATURE_COLUMNS`` columns and a ``target`` column.
-        n_splits : int
-            Number of folds for ``TimeSeriesSplit``.
-        verbose : bool
-            Whether to print per-fold metrics.
-
-        Returns
-        -------
-        dict
-            Metrics including mean out-of-fold ROC-AUC and train/test accuracy.
-        """
-        available = [c for c in FEATURE_COLUMNS if c in df.columns]
-        selected = self._select_top_features(df, available)
-        X = df[selected].values
-        y = df["target"].values
-
+    def _cross_val_auc(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        params: dict,
+        n_splits: int,
+        verbose: bool,
+        label: str | None = None,
+    ) -> tuple[float, list[float]]:
         tscv = TimeSeriesSplit(n_splits=n_splits)
         oof_aucs: list[float] = []
 
@@ -141,7 +155,7 @@ class CryptoTrendModel:
             X_tr, X_val = X[train_idx], X[val_idx]
             y_tr, y_val = y[train_idx], y[val_idx]
 
-            fold_model = XGBClassifier(**self.params)
+            fold_model = XGBClassifier(**params)
             fit_kwargs = {
                 "eval_set": [(X_val, y_val)],
                 "verbose": False,
@@ -166,9 +180,109 @@ class CryptoTrendModel:
             auc = roc_auc_score(y_val, proba)
             oof_aucs.append(auc)
             if verbose:
-                print(f"  [{self.symbol}] fold {fold + 1}/{n_splits}  AUC={auc:.4f}")
+                prefix = f"[{self.symbol}]"
+                if label:
+                    prefix += f" {label}"
+                print(f"  {prefix} fold {fold + 1}/{n_splits}  AUC={auc:.4f}")
 
-        mean_auc = float(np.mean(oof_aucs))
+        return float(np.mean(oof_aucs)), oof_aucs
+
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
+
+    def train(
+        self,
+        df: pd.DataFrame,
+        n_splits: int = 5,
+        verbose: bool = True,
+        target_column: str | None = None,
+        param_grid: list[dict] | None = None,
+        importance_threshold: float | None = None,
+    ) -> dict:
+        """
+        Train on a feature DataFrame that contains a target column.
+
+        Uses time-series cross-validation to report out-of-fold AUC before
+        fitting the final model on all available data. Optionally runs a
+        small hyper-parameter grid search and prunes uninformative features
+        using XGBoost feature importances.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Feature matrix with ``FEATURE_COLUMNS`` columns and a target column.
+        n_splits : int
+            Number of folds for ``TimeSeriesSplit``.
+        verbose : bool
+            Whether to print per-fold metrics.
+        target_column : str | None
+            Which target column to use (defaults to current ``self.target_column``).
+        param_grid : list[dict] | None
+            Optional grid of parameter dicts to search; best mean OOF AUC wins.
+        importance_threshold : float | None
+            Drop features whose importance is at or below this threshold after
+            a quick importance-only fit. Defaults to ``self.importance_threshold``.
+
+        Returns
+        -------
+        dict
+            Metrics including mean out-of-fold ROC-AUC, train/test accuracy,
+            and the chosen parameter set.
+        """
+        if target_column:
+            self.target_column = target_column
+        threshold = (
+            importance_threshold
+            if importance_threshold is not None
+            else self.importance_threshold
+        )
+
+        available = [c for c in FEATURE_COLUMNS if c in df.columns]
+        selected = self._select_top_features(df, available)
+        X = df[selected].values
+        y = df[self.target_column].values
+
+        candidates = param_grid if param_grid else [self.params]
+        cv_results: list[dict] = []
+        best_idx = 0
+        best_mean_auc = -np.inf
+
+        for idx, params in enumerate(candidates):
+            label = f"grid#{idx + 1}" if len(candidates) > 1 else None
+            mean_auc, fold_aucs = self._cross_val_auc(
+                X, y, params, n_splits=n_splits, verbose=verbose, label=label
+            )
+            cv_results.append({"params": params, "mean_auc": mean_auc, "folds": fold_aucs})
+            if mean_auc > best_mean_auc:
+                best_idx = idx
+                best_mean_auc = mean_auc
+
+        self.params = candidates[best_idx]
+        mean_auc = best_mean_auc
+        best_folds = cv_results[best_idx]["folds"]
+        if verbose and len(candidates) > 1:
+            print(
+                f"  [{self.symbol}] best grid={best_idx + 1}/{len(candidates)} "
+                f"mean OOF AUC={mean_auc:.4f}"
+            )
+
+        importance_ranking: list[tuple[str, float]] = []
+        if threshold is not None:
+            # threshold=0.0 keeps only positively important predictors
+            pruned, importance_ranking = self._prune_with_importance(
+                df, selected, self.params, threshold=threshold
+            )
+            if pruned != selected and verbose:
+                print(
+                    f"  [{self.symbol}] importance pruning kept {len(pruned)}/{len(selected)} features"
+                )
+            selected = pruned
+            X = df[selected].values
+            mean_auc, best_folds = self._cross_val_auc(
+                X, y, self.params, n_splits=n_splits, verbose=verbose, label="pruned"
+            )
+
         if verbose:
             print(f"  [{self.symbol}] mean OOF AUC = {mean_auc:.4f}")
 
@@ -215,6 +329,14 @@ class CryptoTrendModel:
             test_pred = self._model.predict(X_val)
             test_accuracy = float(accuracy_score(y_val, test_pred))
 
+        feature_importance = []
+        if hasattr(self._model, "feature_importances_"):
+            feature_importance = sorted(
+                zip(selected, self._model.feature_importances_),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )
+
         if verbose:
             acc_msg = []
             if train_accuracy is not None:
@@ -226,8 +348,13 @@ class CryptoTrendModel:
 
         return {
             "oof_auc": mean_auc,
+            "fold_aucs": best_folds,
             "train_accuracy": train_accuracy,
             "test_accuracy": test_accuracy,
+            "params": self.params,
+            "features": selected,
+            "importance_ranking": importance_ranking or feature_importance,
+            "target_column": self.target_column,
         }
 
     # ------------------------------------------------------------------
@@ -285,7 +412,8 @@ class CryptoTrendModel:
 
     def _model_path(self) -> str:
         os.makedirs(self.model_dir, exist_ok=True)
-        return os.path.join(self.model_dir, f"{self.symbol}.joblib")
+        suffix = f"_{self.variant}" if self.variant else ""
+        return os.path.join(self.model_dir, f"{self.symbol}{suffix}.joblib")
 
     def save(self) -> str:
         """Persist model to disk. Returns the saved file path."""
@@ -295,6 +423,9 @@ class CryptoTrendModel:
             "model": self._model,
             "feature_columns": self._feature_columns,
             "symbol": self.symbol,
+            "params": self.params,
+            "variant": self.variant,
+            "target_column": self.target_column,
         }
         path = self._model_path()
         joblib.dump(payload, path)
@@ -311,4 +442,7 @@ class CryptoTrendModel:
         payload = joblib.load(path)
         self._model = payload["model"]
         self._feature_columns = payload["feature_columns"]
+        self.params = payload.get("params", self.params)
+        self.variant = payload.get("variant", self.variant)
+        self.target_column = payload.get("target_column", self.target_column)
         return self

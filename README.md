@@ -2,6 +2,10 @@
 
 A Python project that uses **XGBoost** to predict the probability of a price
 rise in the next **4 hours** for 10 major cryptocurrency pairs traded on Binance.
+Two label definitions are supported during training and prediction:
+
+- **Primitive**: future close > current close
+- **1% threshold**: future close is at least **1%** higher than current close
 
 ## Supported Symbols
 
@@ -56,12 +60,15 @@ python -m src.train
 ```
 
 This fetches the last 1 000 hourly candles for each symbol, engineers features,
-trains an XGBoost classifier with time-series cross-validation and saves one
-model file per symbol to `models/`.
+trains two XGBoost classifiers per symbol (primitive vs. 1% return targets) with
+time-series cross-validation, a small regularization grid search, feature
+importance pruning, and simple baselines for comparison. One model file per
+target variant is saved to `models/`.
 
-During training you will see both the mean out-of-fold AUC and the accuracy on
-the chronological training window versus a held-out test window, making it easy
-to spot overfitting.
+During training you will see the mean out-of-fold AUC, the accuracy on the
+chronological training window versus a held-out test window, baseline scores,
+and which parameter set won the grid search — making it easy to spot
+overfitting.
 
 Optional arguments:
 
@@ -80,6 +87,8 @@ python -m src.predict
 
 Fetches the latest candles, applies feature engineering and outputs the
 **probability of an upward price move** over the next 4 hours for each symbol.
+Use `--target-type` to pick which trained label to load (`primitive` or
+`return_1pct`).
 
 ```
 === 4-Hour Uptrend Probability ===
@@ -95,6 +104,7 @@ Optional arguments:
 | `--symbols` | all 10 | Space-separated list of symbols |
 | `--interval` | `1h` | Binance kline interval |
 | `--json` | off | Output results as JSON |
+| `--target-type` | `primitive` | Which trained target variant to load |
 
 JSON output example:
 
@@ -115,24 +125,24 @@ JSON output example:
 The repository now concentrates solely on producing robust probability
 predictions. Training uses strict chronological splits, cross-validation, and
 early stopping on a held-out validation window (AUC). Feature space is
-regularised by correlation-based selection and rolling, stationary transforms
+regularized by correlation-based selection and rolling, stationary transforms
 to reduce noise.
 
 ---
 
 ## Features
 
-FEATURE_COLUMNS contains **38 total indicators** derived from OHLCV candlestick
-data (35 technical features plus 3 stationarity-based helpers) before any
-feature selection:
+FEATURE_COLUMNS contains **46 total indicators** derived from OHLCV candlestick
+data before any feature selection:
 
-- **Moving averages**: SMA & EMA (7, 14, 21, 50 periods)
-- **RSI** (14-period)
-- **MACD** (12/26/9): line, signal, histogram
+- **Moving averages**: SMA & EMA (7, 14, 21, 50 periods) + EMA slopes
+- **RSI** (14-period) + short-term RSI slope
+- **MACD** (12/26/9): line, signal, histogram + histogram slope
+- **Trend-strength**: ADX (+DI / -DI)
 - **Bollinger Bands**: upper/lower bands, %B, bandwidth
-- **ATR** (14-period) — volatility measure
+- **Volatility context**: ATR, ATR as % of price, realized volatility (6, 24)
 - **Stochastic Oscillator** (%K, %D)
-- **On-Balance Volume** (OBV)
+- **Volume trends**: OBV, Volume Price Trend (VPT) + VPT MA(14)
 - **Price features**: 1h/4h/24h returns, candle body/wick ratios, H-L spread
 - **Volume features**: volume MAs, relative volume, taker-buy ratio
 - **Rate of Change** (3, 6, 12, 24 periods)
@@ -144,9 +154,14 @@ feature selection:
 ## Model Details
 
 - **Algorithm**: XGBoost binary classifier (`XGBClassifier`)
-- **Target**: 1 if the close price 4 candles ahead > current close; 0 otherwise
+- **Targets**:
+  - Primitive: close price 4 candles ahead > current close
+  - Threshold: forward return > **1%**
+- **Regularization**: small grid search across stronger regularization options,
+  early stopping, feature-importance pruning after correlation pre-filtering
 - **Validation**: Time-series cross-validation (`TimeSeriesSplit`, 5 folds) +
   early stopping on a chronological hold-out slice using AUC
+- **Baselines**: positive 4h return, ROC(6) momentum, EMA(7/21) crossover
 - **Output**: Probability in **[0, 1]** — higher values indicate a stronger
   uptrend signal for the next 4 hours
 
