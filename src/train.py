@@ -45,7 +45,7 @@ def train_symbol(
     Returns
     -------
     dict
-        Training metrics, e.g. ``{"symbol": ..., "oof_auc": ...}``.
+        Training metrics, e.g. ``{"symbol": ..., "oof_auc": ..., "train_accuracy": ..., "test_accuracy": ...}``.
     """
     if verbose:
         print(f"\nTraining model for {symbol} …")
@@ -64,6 +64,13 @@ def train_symbol(
     model = CryptoTrendModel(symbol=symbol)
     metrics = model.train(df_feat, n_splits=n_splits, verbose=verbose)
     path = model.save()
+
+    if verbose:
+        train_acc = metrics.get("train_accuracy")
+        test_acc = metrics.get("test_accuracy")
+        train_acc_fmt = f"{train_acc:.4f}" if train_acc is not None else "N/A"
+        test_acc_fmt = f"{test_acc:.4f}" if test_acc is not None else "N/A"
+        print(f"  Accuracy — train: {train_acc_fmt}  test: {test_acc_fmt}")
 
     if verbose:
         print(f"  Model saved to {path}")
@@ -113,7 +120,15 @@ def main() -> None:
     print("\n=== Training Summary ===")
     for r in results:
         auc = f"{r['oof_auc']:.4f}" if r.get("oof_auc") is not None else "N/A"
-        print(f"  {r['symbol']:<12} OOF AUC={auc}  status={r['status']}")
+        train_acc = r.get("train_accuracy")
+        test_acc = r.get("test_accuracy")
+        train_acc_fmt = f"{train_acc:.4f}" if train_acc is not None else "N/A"
+        test_acc_fmt = f"{test_acc:.4f}" if test_acc is not None else "N/A"
+        print(
+            f"  {r['symbol']:<12} OOF AUC={auc}  "
+            f"train_acc={train_acc_fmt}  test_acc={test_acc_fmt}  "
+            f"status={r['status']}"
+        )
 
 
 if __name__ == "__main__":
