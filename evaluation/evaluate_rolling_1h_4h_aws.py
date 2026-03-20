@@ -19,6 +19,18 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
+# AWS 区域 (先定义，后续 SSM 会用到)
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+# 尝试导入 boto3
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+    print("Warning: boto3 not available, will use local cache only")
+
 # AWS 配置 - 请根据实际情况修改
 # 支持从 SSM Parameter Store 获取配置
 SSM_PARAM_PREFIX = os.environ.get('SSM_PARAM_PREFIX', '/crypto-trading/')
@@ -37,7 +49,6 @@ def get_ssm_parameter(name: str, default: str = None):
 
 # 从 SSM 或环境变量获取配置
 AWS_BUCKET_NAME = os.environ.get('AWS_BUCKET_NAME') or get_ssm_parameter('s3-bucket-name', 'your-bucket-name')
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 MODEL_S3_PREFIX = os.environ.get('MODEL_S3_PREFIX') or get_ssm_parameter('model-s3-prefix', 'models/XGBoost-Crypto-Market-Trend-Prediction')
 
 # 是否使用本地缓存
@@ -65,15 +76,6 @@ from sklearn.metrics import (
 )
 import joblib
 from xgboost import XGBClassifier
-
-# 尝试导入 boto3
-try:
-    import boto3
-    from botocore.exceptions import ClientError
-    BOTO3_AVAILABLE = True
-except ImportError:
-    BOTO3_AVAILABLE = False
-    print("Warning: boto3 not available, will use local cache only")
 
 from src.data_fetcher import fetch_klines
 from src.feature_engineering import build_features
