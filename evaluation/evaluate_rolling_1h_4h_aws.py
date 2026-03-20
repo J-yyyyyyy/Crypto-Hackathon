@@ -12,17 +12,50 @@ import sys
 import os
 import tempfile
 import shutil
+from pathlib import Path
+
+# 自动检测项目根目录
+# 脚本位于 evaluation/ 目录，项目根目录在父目录
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 
 # AWS 配置 - 请根据实际情况修改
-AWS_BUCKET_NAME = os.environ.get('AWS_BUCKET_NAME', 'your-bucket-name')
+# 支持从 SSM Parameter Store 获取配置
+SSM_PARAM_PREFIX = os.environ.get('SSM_PARAM_PREFIX', '/crypto-trading/')
+
+def get_ssm_parameter(name: str, default: str = None):
+    """从 SSM Parameter Store 获取参数"""
+    if not BOTO3_AVAILABLE:
+        return default
+    try:
+        ssm_client = boto3.client('ssm', region_name=AWS_REGION)
+        response = ssm_client.get_parameter(Name=f"{SSM_PARAM_PREFIX}{name}", WithDecryption=True)
+        return response['Parameter']['Value']
+    except Exception as e:
+        print(f"  Warning: Failed to get SSM param {name}: {e}")
+        return default
+
+# 从 SSM 或环境变量获取配置
+AWS_BUCKET_NAME = os.environ.get('AWS_BUCKET_NAME') or get_ssm_parameter('s3-bucket-name', 'your-bucket-name')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
-MODEL_S3_PREFIX = os.environ.get('MODEL_S3_PREFIX', 'models/XGBoost-Crypto-Market-Trend-Prediction')
+MODEL_S3_PREFIX = os.environ.get('MODEL_S3_PREFIX') or get_ssm_parameter('model-s3-prefix', 'models/XGBoost-Crypto-Market-Trend-Prediction')
 
 # 是否使用本地缓存
 USE_LOCAL_CACHE = os.environ.get('USE_LOCAL_CACHE', 'true').lower() == 'true'
-LOCAL_CACHE_DIR = os.environ.get('LOCAL_CACHE_DIR', 'XGBoost-Crypto-Market-Trend-Prediction/models')
+LOCAL_CACHE_DIR = os.environ.get('LOCAL_CACHE_DIR', str(PROJECT_ROOT / 'models'))
 
-sys.path.insert(0, 'XGBoost-Crypto-Market-Trend-Prediction')
+# 将项目根目录加入 Python 路径
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# 检查 src 目录是否存在
+src_path = PROJECT_ROOT / 'src'
+if not src_path.exists():
+    # 尝试检查是否在 XGBoost-Crypto-Market-Trend-Prediction 子目录中
+    parent = Path(__file__).resolve().parent.parent.parent
+    if (parent / 'src').exists():
+        PROJECT_ROOT = parent
+        sys.path.insert(0, str(PROJECT_ROOT))
+        src_path = PROJECT_ROOT / 'src'
 
 import numpy as np
 import pandas as pd
@@ -58,7 +91,9 @@ def download_model_from_s3(symbol: str, temp_dir: str) -> str:
             return local_path
         raise Exception(f"boto3 not available and local cache not found: {local_path}")
     
-    s3_client = boto3.client('s3', region_name=AWS_REGION)
+    # 使用默认 session（会从 EC2/ECS IAM Role 获取 credentials）
+    session = boto3.session.Session()
+    s3_client = session.client('s3', region_name=AWS_REGION)
     s3_key = f"{MODEL_S3_PREFIX}/{symbol}.joblib"
     local_path = os.path.join(temp_dir, f"{symbol}.joblib")
     
@@ -303,11 +338,15 @@ if __name__ == "__main__":
     print("#"*70)
     
     # AWS 配置
-    print(f"\nAWS Configuration:")
-    print(f"  Bucket: {AWS_BUCKET_NAME}")
-    print(f"  Region: {AWS_REGION}")
-    print(f"  Model Prefix: {MODEL_S3_PREFIX}")
+    print(f"\nConfiguration:")
+    print(f"  Project Root:    {PROJECT_ROOT}")
+    print(f"  Script Dir:      {SCRIPT_DIR}")
+    print(f"  SSM Param Prefix: {SSM_PARAM_PREFIX}")
+    print(f"  AWS Bucket:      {AWS_BUCKET_NAME}")
+    print(f"  AWS Region:      {AWS_REGION}")
+    print(f"  Model Prefix:    {MODEL_S3_PREFIX}")
     print(f"  Use Local Cache: {USE_LOCAL_CACHE}")
+    print(f"  Local Cache Dir: {LOCAL_CACHE_DIR}")
     
     # 创建临时目录
     temp_dir = tempfile.mkdtemp()

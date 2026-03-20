@@ -7,26 +7,33 @@
 
 # 脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+
+# 项目根目录 (脚本所在目录的父目录)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ============================================================
-# AWS 配置 (可以通过环境变量覆盖)
+# AWS SSM Parameter Store 配置
 # ============================================================
 
-# S3 Bucket 名称
-export AWS_BUCKET_NAME="${AWS_BUCKET_NAME:-your-bucket-name}"
+# SSM 参数前缀 (在 Parameter Store 中的路径)
+export SSM_PARAM_PREFIX="${SSM_PARAM_PREFIX:-/crypto-trading/}"
 
-# AWS 区域
+# AWS 区域 (必须设置)
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 
-# 模型在 S3 上的前缀路径
-export MODEL_S3_PREFIX="${MODEL_S3_PREFIX:-models/XGBoost-Crypto-Market-Trend-Prediction}"
+# S3 Bucket 名称 (通过 SSM 或环境变量获取)
+# SSM 参数名: /crypto-trading/s3-bucket-name
+export AWS_BUCKET_NAME="${AWS_BUCKET_NAME:-}"
+
+# 模型在 S3 上的前缀路径 (通过 SSM 或环境变量获取)
+# SSM 参数名: /crypto-trading/model-s3-prefix
+export MODEL_S3_PREFIX="${MODEL_S3_PREFIX:-}"
 
 # 是否使用本地缓存 (true/false)
 export USE_LOCAL_CACHE="${USE_LOCAL_CACHE:-true}"
 
 # 本地缓存目录 (当 USE_LOCAL_CACHE=true 时使用)
-export LOCAL_CACHE_DIR="${LOCAL_CACHE_DIR:-XGBoost-Crypto-Market-Trend-Prediction/models}"
+export LOCAL_CACHE_DIR="${LOCAL_CACHE_DIR:-$PROJECT_ROOT/models}"
 
 # ============================================================
 # 评估参数
@@ -54,6 +61,9 @@ STEP="${STEP:-24}"
 echo "============================================================"
 echo "AWS S3 Rolling Evaluation Configuration"
 echo "============================================================"
+echo "Project Root:   $PROJECT_ROOT"
+echo "Script Dir:     $SCRIPT_DIR"
+echo "SSM Param Prefix: $SSM_PARAM_PREFIX"
 echo "AWS Bucket:      $AWS_BUCKET_NAME"
 echo "AWS Region:     $AWS_REGION"
 echo "Model S3 Prefix: $MODEL_S3_PREFIX"
